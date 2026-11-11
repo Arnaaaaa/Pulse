@@ -21,6 +21,10 @@ function getTransporter() {
     host,
     port,
     auth: { user, pass },
+    // Fail fast instead of leaving the client waiting when the SMTP port is unreachable
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 
   // Verify in background
@@ -30,6 +34,31 @@ function getTransporter() {
   });
 
   return transporter;
+}
+
+// '"PULSE" <me@gmail.com>' -> { name: "PULSE", email: "me@gmail.com" }
+function parseAddress(value) {
+  const match = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(value);
+  return match ? { name: match[1] || undefined, email: match[2].trim() } : { email: value.trim() };
+}
+
+// Brevo's HTTPS API (port 443) — used when BREVO_API_KEY is set, e.g. on hosts that block outbound SMTP
+async function sendViaBrevo({ from, toEmail, toName, subject, text, html }) {
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { "api-key": process.env.BREVO_API_KEY, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({
+      sender: parseAddress(from),
+      to: [{ email: toEmail, ...(toName ? { name: toName } : {}) }],
+      subject,
+      textContent: text,
+      htmlContent: html,
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Brevo API ${res.status}: ${body.message || body.code || "request failed"}`);
+  return body.messageId;
 }
 
 async function sendOTPEmail(toEmail, toName, code, purpose) {
@@ -59,6 +88,18 @@ async function sendOTPEmail(toEmail, toName, code, purpose) {
   const isProd = process.env.NODE_ENV === "production";
   // Codes are only ever printed to the server console in development, never returned to the client
   if (!isProd) console.log(`[mailer] OTP for ${toEmail} (${purpose}): ${code}`);
+
+  if (process.env.BREVO_API_KEY) {
+    try {
+      const messageId = await sendViaBrevo({ from, toEmail, toName, subject, text, html });
+      console.log(`[mailer] Email sent via Brevo to ${toEmail} (${purpose}) messageId=${messageId}`);
+      return { mocked: false, messageId };
+    } catch (err) {
+      console.error(`[mailer] Brevo failed to send OTP to ${toEmail}:`, err.message);
+      if (!isProd) return { mocked: true, error: err.message };
+      throw err;
+    }
+  }
 
   const tx = getTransporter();
   if (!tx) {
