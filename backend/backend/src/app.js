@@ -5,6 +5,8 @@ const { rateLimit } = require("express-rate-limit");
 require("./models");
 
 const app = express();
+// Behind one reverse proxy (Render): use the client IP from X-Forwarded-For so rate limits are per user
+if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
 app.set("query parser", "simple"); // query values are plain strings, so they cannot smuggle in Mongo operators
 app.use(cors(process.env.CORS_ORIGIN ? { origin: process.env.CORS_ORIGIN.split(",") } : undefined));
 app.use(express.json({ limit: "100kb" }));

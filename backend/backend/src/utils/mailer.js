@@ -36,10 +36,11 @@ function getTransporter() {
   return transporter;
 }
 
-// '"PULSE" <me@gmail.com>' -> { name: "PULSE", email: "me@gmail.com" }
+// '"PULSE" <me@gmail.com>' (or, leniently, '"PULSE" me@gmail.com') -> { name: "PULSE", email: "me@gmail.com" }
 function parseAddress(value) {
-  const match = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(value);
-  return match ? { name: match[1] || undefined, email: match[2].trim() } : { email: value.trim() };
+  const email = (/[^\s<>"]+@[^\s<>"]+/.exec(value) || [value.trim()])[0];
+  const name = value.replace(email, "").replace(/[<>"]/g, "").trim();
+  return name ? { name, email } : { email };
 }
 
 // Brevo's HTTPS API (port 443) — used when BREVO_API_KEY is set, e.g. on hosts that block outbound SMTP
